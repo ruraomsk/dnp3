@@ -40,6 +40,8 @@ class VlrHelper {
         VFT_SQL_PROP.addField(FieldFormat.create("<datas><S><A=data><D=Префикс имен таблиц для хранения истории переменных>"));
         VFT_SQL_PROP.addField(FieldFormat.create("<timestep><L><A=500><D=Основной квант времени>"));
         VFT_SQL_PROP.addField(FieldFormat.create("<stepSQL><L><A=5000><D=Интервал сохранения переменных в БД >"));
+        VFT_SQL_PROP.addField(FieldFormat.create("<initSQL><B><A=true><D=Создавать БД при каждом запуске>"));
+        VFT_SQL_PROP.addField(FieldFormat.create("<longSQL><L><A=5000000><D=Размер кольцевой таблицы БД>"));
 
         VFT_CNL_PROP = new TableFormat();
         VFT_CNL_PROP.addField(FieldFormat.create("<canel><I><D=Номер канала>"));
@@ -51,7 +53,7 @@ class VlrHelper {
         VFT_VLR_PROP.addField(FieldFormat.create("<canel><I><D=Номер канала>"));
         VFT_VLR_PROP.addField(FieldFormat.create("<IPAddress><S><D=IP адресс устройства >"));
         VFT_VLR_PROP.addField(FieldFormat.create("<port><I><D=Номер порта>"));
-        VFT_VLR_PROP.addField(FieldFormat.create("<slip><B><A=false><D=Истина если SLIP>"));
+        VFT_VLR_PROP.addField(FieldFormat.create("<slip><B><A=false><D=SLIP протокол>"));
 
         VFT_REGISTERS = new TableFormat();
         FieldFormat ff = FieldFormat.create("<name><S><D=Имя переменной>");
@@ -94,7 +96,8 @@ class VlrHelper {
             reg.setArchived(bpo.getBoolean("arch"));
             reg.setEprom(bpo.getBoolean("eprom"));
             reg.setSending(bpo.getBoolean("send"));
-            reg.setConstant(!reg.isEprom());
+            reg.setConstant(false);
+            reg.setReadOnly(!reg.isEprom());
             masterregisters.addNewRegister(canel, reg, prefix + bpo.getString("name"));
             masterregisters.addDescription(canel, reg.getuId(), bpo.getString("name")+":"+bpo.getString("description"));
         }
@@ -105,13 +108,15 @@ class VlrHelper {
             reg.setArchived(spo.getBoolean("arch"));
             reg.setEprom(spo.getBoolean("eprom"));
             reg.setSending(spo.getBoolean("send"));
-            reg.setConstant(!reg.isEprom());
+            reg.setConstant(false);
+            reg.setReadOnly(!reg.isEprom());
             masterregisters.addNewRegister(canel, reg, prefix + spo.getString("name"));
             masterregisters.addDescription(canel, reg.getuId(), spo.getString("name")+":"+spo.getString("description"));
         }
         for (DataRecord cd : Const) {
             reg = new Register(nextid++, cd.getInt("type"));
             reg.setConstant(true);
+            reg.setReadOnly(true);
             masterregisters.addNewRegister(canel, reg, prefix + cd.getString("name"));
             masterregisters.addDescription(canel, reg.getuId(),cd.getString("name")+":"+cd.getString("description"));
             Object value = 0;
@@ -129,7 +134,7 @@ class VlrHelper {
                     value = Long.parseLong(cd.getString("value"));
                     break;
             }
-            OneReg oreg = new OneReg(new Date(System.currentTimeMillis()), reg, value, Util.CT_DATA_GOOD);
+            OneReg oreg = new OneReg(System.currentTimeMillis(), reg, value, Util.CT_DATA_GOOD);
             masterregisters.changeRegister(canel, oreg);
         }
     }
@@ -149,7 +154,7 @@ class VlrHelper {
                 reg.setValue("send", oreg.getReg().isSending());
                 reg.setValue("arch", oreg.getReg().isArchived());
                 reg.setValue("eprom", oreg.getReg().isEprom());
-                reg.setValue("readonly", oreg.getReg().isConstant());
+                reg.setValue("readonly", oreg.getReg().isReadOnly());
 
             }
         }

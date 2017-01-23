@@ -7,6 +7,7 @@ import com.tibbo.aggregate.common.Log;
 import com.tibbo.aggregate.common.context.CallerController;
 import com.tibbo.aggregate.common.context.ContextException;
 import com.tibbo.aggregate.common.context.ContextUtils;
+import com.tibbo.aggregate.common.context.FunctionDefinition;
 import com.tibbo.aggregate.common.context.VariableDefinition;
 import com.tibbo.aggregate.common.datatable.DataRecord;
 import com.tibbo.aggregate.common.datatable.DataTable;
@@ -21,13 +22,12 @@ import com.tibbo.aggregate.common.security.ServerPermissionChecker;
 import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import ruraomsk.list.ru.cthulhu.MainMaster;
 import ruraomsk.list.ru.cthulhu.OneReg;
 import ruraomsk.list.ru.cthulhu.Registers;
 import ruraomsk.list.ru.cthulhu.pocket.MasterDC;
 import ruraomsk.list.ru.cthulhu.pocket.MasterFS;
+import ruraomsk.list.ru.strongsql.DescrValue;
 import ruraomsk.list.ru.strongsql.ParamSQL;
 import ruraomsk.list.ru.strongsql.SetValue;
 import ruraomsk.list.ru.strongsql.StrongSql;
@@ -50,10 +50,11 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     Long timestep;
     Long stepSQL;
     StrongSql sqldata;
-    int needReadAllValues=0;
+    int needReadAllValues = 0;
+    int needUpToData = 0;
 
     public DNP3DeviceDriver() {
-        super("vlr", VlrHelper.VFT_SQL_PROP);
+        super("vlrbus", VlrHelper.VFT_SQL_PROP);
     }
 
     @Override
@@ -79,6 +80,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         deviceContext.addVariableDefinition(vd);
 
         makeRegisters(deviceContext);
+        deviceContext.setDeviceType("vlrbus");
     }
 
     /**
@@ -101,11 +103,10 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     public List<VariableDefinition> readVariableDefinitions(DeviceEntities entities) throws ContextException, DeviceException, DisconnectionException {
         List<VariableDefinition> result = new ArrayList<>();
         for (DataRecord reg : getDeviceContext().getVariable("registers", getDeviceContext().getCallerController())) {
-            boolean writeble = !reg.getBoolean("readonly");
             String name = reg.getString("name");
             TableFormat tf = new TableFormat(1, 1, FieldFormat.create(name, VlrHelper.setCharType(reg.getInt("type")), reg.getString("description")));
             tf.setUnresizable(true);
-            result.add(new VariableDefinition(name, tf, true, writeble, reg.getString("description"), "remote"));
+            result.add(new VariableDefinition(name, tf, true, !reg.getBoolean("readonly"), reg.getString("description"), "remote"));
         }
         return result;
     }
@@ -128,7 +129,17 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         if (oreg == null) {
             return;
         }
-        oreg.setValue(value.get());
+        if (oreg.getReg().isReadOnly()) {
+            return;
+        }
+        Object val = value.get();
+        if (oreg.getReg().getType() == 3) {
+            val = ((int) (((Long) value.get()) & 0xffffffff));
+        };
+        if (oreg.getReg().getType() == 4) {
+            val = ((byte) (Integer.parseInt((String) value.get()) & 0xff));
+        }
+        oreg.setValue(val);
         int canel = masterregisters.getContoller(vd.getName());
         for (MasterDC dc : dcmaster) {
             if (dc.getController() == canel) {
@@ -143,6 +154,9 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         ArrayList<SetValue> arrayValues = new ArrayList<>();
         for (MasterDC dc : dcmaster) {
             for (OneReg oreg : masterregisters.getOneRegs(dc.getController())) {
+                if (oreg.getGood() != 0) {
+                    continue;
+                }
                 Integer newID = dc.getController() << 16 | oreg.getuId();
                 Object value = oreg.getValue();
                 arrayValues.add(new SetValue(newID, oreg.getTime(), value, oreg.getGood()));
@@ -153,17 +167,43 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
                 }
             }
         }
-        sqldata.addValues(new Timestamp(System.currentTimeMillis()), arrayValues);
-        if(++needReadAllValues>9){
-            needReadAllValues=0;
+        if (!arrayValues.isEmpty()) {
+            sqldata.addValues(new Timestamp(System.currentTimeMillis()), arrayValues);
+        }
+        if (++needReadAllValues > 9) {
+            needReadAllValues = 0;
             for (MasterDC dc : dcmaster) {
                 dc.readAllNotSendingValue();
                 dc.readAllSendingValue();
+//                dc.upRingBuffer();
             }
-            
+
         }
-        
         super.finishSynchronization(); //To change body of generated methods, choose Tools | Templates.
+    }
+
+    @Override
+    public void startSynchronization() throws DeviceException {
+        if (++needUpToData > 4) {
+            needUpToData = 0;
+//            for (MasterDC dc : dcmaster) {
+//            }
+            for (MasterFS fs : fsmaster) {
+                fs.requestDateTime();
+            }
+        }
+        super.startSynchronization(); //To change body of generated methods, choose Tools | Templates.
+    }
+
+    @Override
+    public List<FunctionDefinition> readFunctionDefinitions(DeviceEntities entities) throws ContextException, DeviceException, DisconnectionException {
+        return DriverHelper.makerFunctionDefinitions();
+
+    }
+
+    @Override
+    public DataTable executeFunction(FunctionDefinition fd, CallerController caller, DataTable parameters) throws ContextException, DeviceException, DisconnectionException {
+        return DriverHelper.executeFunction(this, fd, caller, parameters);
     }
 
     @Override
@@ -173,8 +213,9 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             DataTable devices = getDeviceContext().getVariable("devices", getDeviceContext().getCallerController());
             param = VlrHelper.setParamData(getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()));
             stepSQL = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getLong("stepSQL");
-            sqldata = new StrongSql(param, stepSQL);
             timestep = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getLong("timestep");
+            boolean initSQL = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getBoolean("initSQL");
+            long longSQL = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getLong("longSQL");
             mainmaster = new MainMaster(masterregisters, timestep);
             fsmaster = new ArrayList<>();
             dcmaster = new ArrayList<>();
@@ -193,11 +234,23 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
                 dc.readAllNotSendingValue();
                 dc.readAllSendingValue();
             }
-            for(MasterFS fs:fsmaster){
+            for (MasterFS fs : fsmaster) {
                 fs.readResources();
                 fs.startKeepAlive();
             }
-
+            if (initSQL) {
+                ArrayList<DescrValue> arraydesc = new ArrayList<>();
+                DataTable registers = getDeviceContext().getVariable("registers", getDeviceContext().getCallerController());
+                Integer count = 0;
+                for (DataRecord reg : registers) {
+                    String name = reg.getString("name");
+                    int key = (reg.getInt("canel") << 16) | (reg.getInt("id"));
+                    arraydesc.add(new DescrValue(name, key, reg.getInt("type")));
+                    count++;
+                }
+                new StrongSql(param, arraydesc, 1, longSQL, "VLR DataTable");
+            }
+            sqldata = new StrongSql(param, stepSQL);
         } catch (ContextException ex) {
             throw new DeviceException("Нет canels или devices");
         }
