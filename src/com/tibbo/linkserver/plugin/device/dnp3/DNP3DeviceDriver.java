@@ -21,7 +21,10 @@ import com.tibbo.aggregate.common.device.DisconnectionException;
 import com.tibbo.aggregate.common.security.ServerPermissionChecker;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.GregorianCalendar;
 import java.util.List;
+import java.util.SimpleTimeZone;
+import java.util.TimeZone;
 import ruraomsk.list.ru.cthulhu.MainMaster;
 import ruraomsk.list.ru.cthulhu.OneReg;
 import ruraomsk.list.ru.cthulhu.Registers;
@@ -45,13 +48,20 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     StrongSql sSql = null;
     VLRXMLManager vlrManager = null;
     MainMaster mainmaster = null;
-    List<MasterFS> fsmaster;
-    List<MasterDC> dcmaster;
-    Long timestep;
-    Long stepSQL;
+    List<MasterFS> fsmaster = null;
+    List<MasterDC> dcmaster = null;
+    Long timestep = 500L;
+    Long stepSQL = 5000L;
+    String lastfunction = "";
     StrongSql sqldata;
-    int needReadAllValues = 0;
-    int needUpToData = 0;
+    StrongSql sqlseek;
+    Long needReadAllValues = 0L;
+    Long needRingBuffer = 0L;
+    Long needUpToData = 0L;
+    Long startSync = 0L;
+    Long finishSync = 0L;
+    Long setDateTime = 0L;
+    boolean readall = true;
 
     public DNP3DeviceDriver() {
         super("vlrbus", VlrHelper.VFT_SQL_PROP);
@@ -151,6 +161,12 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
 
     @Override
     public void finishSynchronization() throws DeviceException, DisconnectionException {
+        if (dcmaster == null) {
+            return;
+        }
+        if (fsmaster == null) {
+            return;
+        }
         ArrayList<SetValue> arrayValues = new ArrayList<>();
         for (MasterDC dc : dcmaster) {
             for (OneReg oreg : masterregisters.getOneRegs(dc.getController())) {
@@ -163,19 +179,20 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
                 for (OneReg horeg : masterregisters.getHistoryOneReg(dc.getController(), oreg.getuId())) {
                     value = horeg.getValue();
                     arrayValues.add(new SetValue(newID, horeg.getTime(), value, oreg.getGood()));
-
                 }
             }
         }
         if (!arrayValues.isEmpty()) {
             sqldata.addValues(new Timestamp(System.currentTimeMillis()), arrayValues);
         }
-        if (++needReadAllValues > 9) {
-            needReadAllValues = 0;
+        needReadAllValues += System.currentTimeMillis() - startSync;
+        startSync = System.currentTimeMillis();
+
+        if (needReadAllValues > 60000L) {
+            needReadAllValues = 0L;
             for (MasterDC dc : dcmaster) {
                 dc.readAllNotSendingValue();
                 dc.readAllSendingValue();
-//                dc.upRingBuffer();
             }
 
         }
@@ -184,13 +201,30 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
 
     @Override
     public void startSynchronization() throws DeviceException {
-        if (++needUpToData > 4) {
-            needUpToData = 0;
-//            for (MasterDC dc : dcmaster) {
-//            }
+        if (fsmaster == null) {
+            return;
+        }
+        needUpToData += System.currentTimeMillis() - finishSync;
+        finishSync = System.currentTimeMillis();
+        if (needUpToData > stepSQL) {
+            needUpToData = 0L;
+            for (MasterDC dc : dcmaster) {
+                if (readall) {
+                    dc.readAllSendingValue();
+                }
+                dc.upRingBuffer();
+            }
             for (MasterFS fs : fsmaster) {
                 fs.requestDateTime();
             }
+        }
+        if ((System.currentTimeMillis() - setDateTime) > 3600000L) {
+            for (MasterFS fs : fsmaster) {
+                TimeZone zone = new SimpleTimeZone(0, "UTC");
+                fs.setDateTime(new GregorianCalendar(zone));
+                fs.startKeepAlive();
+            }
+            setDateTime = System.currentTimeMillis();
         }
         super.startSynchronization(); //To change body of generated methods, choose Tools | Templates.
     }
@@ -214,6 +248,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             param = VlrHelper.setParamData(getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()));
             stepSQL = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getLong("stepSQL");
             timestep = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getLong("timestep");
+            readall = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getBoolean("readall");
             boolean initSQL = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getBoolean("initSQL");
             long longSQL = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController()).rec().getLong("longSQL");
             mainmaster = new MainMaster(masterregisters, timestep);
@@ -233,11 +268,15 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             for (MasterDC dc : dcmaster) {
                 dc.readAllNotSendingValue();
                 dc.readAllSendingValue();
+                dc.upRingBuffer();
             }
             for (MasterFS fs : fsmaster) {
                 fs.readResources();
+                TimeZone zone = new SimpleTimeZone(0, "UTC");
+                fs.setDateTime(new GregorianCalendar(zone));
                 fs.startKeepAlive();
             }
+            setDateTime = System.currentTimeMillis();
             if (initSQL) {
                 ArrayList<DescrValue> arraydesc = new ArrayList<>();
                 DataTable registers = getDeviceContext().getVariable("registers", getDeviceContext().getCallerController());
@@ -251,9 +290,12 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
                 new StrongSql(param, arraydesc, 1, longSQL, "VLR DataTable");
             }
             sqldata = new StrongSql(param, stepSQL);
+            sqlseek = new StrongSql(param);
         } catch (ContextException ex) {
             throw new DeviceException("Нет canels или devices");
         }
+        startSync = System.currentTimeMillis();
+        finishSync = System.currentTimeMillis();
         super.connect();
     }
 
@@ -267,6 +309,9 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         }
         mainmaster.stopAll();
         sqldata.disconnect();
+        sqlseek.disconnect();
+        vlrManager.close();
+        vlrManager = null;
         super.disconnect();
     }
 
@@ -284,17 +329,15 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         masterregisters = new Registers();
         for (DataRecord crec : canels) {
             DataTable BPO, SPO, Const;
-            BPO = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getInt("bpo"), 1));
-            SPO = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getInt("spo"), 2));
-            Const = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getInt("spo"), 3));
+            BPO = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("spo"), 1));
+            SPO = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("ppo"), 2));
+            Const = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("ppo"), 3));
             VlrHelper.addRegisters(masterregisters, crec.getInt("canel"), crec.getString("prefix"), BPO, SPO, Const);
             writeflag = true;
         }
         if (writeflag) {
             deviceContext.setVariable("registers", getDeviceContext().getCallerController(), VlrHelper.makeRegisters(masterregisters, canels));
         }
-        vlrManager.close();
-        vlrManager = null;
     }
 
 }

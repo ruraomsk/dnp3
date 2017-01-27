@@ -42,18 +42,21 @@ class VlrHelper {
         VFT_SQL_PROP.addField(FieldFormat.create("<stepSQL><L><A=5000><D=Интервал сохранения переменных в БД >"));
         VFT_SQL_PROP.addField(FieldFormat.create("<initSQL><B><A=true><D=Создавать БД при каждом запуске>"));
         VFT_SQL_PROP.addField(FieldFormat.create("<longSQL><L><A=5000000><D=Размер кольцевой таблицы БД>"));
+        VFT_SQL_PROP.addField(FieldFormat.create("<readall><B><A=true><D=Принудительное чтение всех переменных>"));
 
         VFT_CNL_PROP = new TableFormat();
         VFT_CNL_PROP.addField(FieldFormat.create("<canel><I><D=Номер канала>"));
-        VFT_CNL_PROP.addField(FieldFormat.create("<bpo><I><D=Номер версии БПО>"));
-        VFT_CNL_PROP.addField(FieldFormat.create("<spo><I><D=Номер версии СПО>"));
+        VFT_CNL_PROP.addField(FieldFormat.create("<spo><S><D=Номер версии СПО>"));
+        VFT_CNL_PROP.addField(FieldFormat.create("<ppo><S><D=Номер версии ППО>"));
         VFT_CNL_PROP.addField(FieldFormat.create("<prefix><S><D=Префикс имен переменных>"));
+        VFT_CNL_PROP.addField(FieldFormat.create("<description><S><D=Описание>"));
 
         VFT_VLR_PROP = new TableFormat();
         VFT_VLR_PROP.addField(FieldFormat.create("<canel><I><D=Номер канала>"));
         VFT_VLR_PROP.addField(FieldFormat.create("<IPAddress><S><D=IP адресс устройства >"));
         VFT_VLR_PROP.addField(FieldFormat.create("<port><I><D=Номер порта>"));
         VFT_VLR_PROP.addField(FieldFormat.create("<slip><B><A=false><D=SLIP протокол>"));
+        VFT_VLR_PROP.addField(FieldFormat.create("<description><S><D=Описание>"));
 
         VFT_REGISTERS = new TableFormat();
         FieldFormat ff = FieldFormat.create("<name><S><D=Имя переменной>");
@@ -147,7 +150,7 @@ class VlrHelper {
                 reg.setValue("name", masterregisters.getNameReg(cp.getInt("canel"), oreg.getuId()));
                 reg.setValue("canel", cp.getInt("canel"));
                 reg.setValue("id", oreg.getuId());
-                String str=masterregisters.getDescription(cp.getInt("canel"), oreg.getuId());
+                String str=cp.getString("prefix")+masterregisters.getDescription(cp.getInt("canel"), oreg.getuId());
                 if(str==null || str.length()<1)str="+";
                 reg.setValue("description",str );
                 reg.setValue("type", oreg.getReg().getType());
