@@ -28,6 +28,7 @@ import java.util.TimeZone;
 import ruraomsk.list.ru.cthulhu.MainMaster;
 import ruraomsk.list.ru.cthulhu.OneReg;
 import ruraomsk.list.ru.cthulhu.Registers;
+import ruraomsk.list.ru.cthulhu.Util;
 import ruraomsk.list.ru.cthulhu.pocket.MasterDC;
 import ruraomsk.list.ru.cthulhu.pocket.MasterFS;
 import ruraomsk.list.ru.strongsql.DescrValue;
@@ -61,6 +62,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     Long startSync = 0L;
     Long finishSync = 0L;
     Long setDateTime = 0L;
+    Long lastWriteSQL = 0L;
     boolean readall = true;
 
     public DNP3DeviceDriver() {
@@ -167,34 +169,40 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         if (fsmaster == null) {
             return;
         }
-        ArrayList<SetValue> arrayValues = new ArrayList<>();
         for (MasterDC dc : dcmaster) {
-            for (OneReg oreg : masterregisters.getOneRegs(dc.getController())) {
-                if (oreg.getGood() != 0) {
-                    continue;
-                }
-                Integer newID = dc.getController() << 16 | oreg.getuId();
-                Object value = oreg.getValue();
-                arrayValues.add(new SetValue(newID, oreg.getTime(), value, oreg.getGood()));
-                for (OneReg horeg : masterregisters.getHistoryOneReg(dc.getController(), oreg.getuId())) {
-                    value = horeg.getValue();
-                    arrayValues.add(new SetValue(newID, horeg.getTime(), value, oreg.getGood()));
+            dc.readAllNoGoodNotSendingValue();
+        }
+        if ((System.currentTimeMillis() - lastWriteSQL) > stepSQL) {
+            ArrayList<SetValue> arrayValues = new ArrayList<>();
+            for (MasterDC dc : dcmaster) {
+                long timeall = System.currentTimeMillis();
+                for (OneReg oreg : masterregisters.getOneRegs(dc.getController())) {
+                    if (oreg.getGood() == Util.CT_DATA_NOGOOD) {
+                        continue;
+                    }
+                    Integer newID = dc.getController() << 16 | oreg.getuId();
+                    Object value = oreg.getValue();
+                    arrayValues.add(new SetValue(newID, oreg.getTime(), value, oreg.getGood()));
+                    for (OneReg horeg : masterregisters.getHistoryOneReg(dc.getController(), oreg.getuId())) {
+                        value = horeg.getValue();
+                        arrayValues.add(new SetValue(newID, horeg.getTime(), value, oreg.getGood()));
+                    }
                 }
             }
+            if (!arrayValues.isEmpty()) {
+                sqldata.addValues(new Timestamp(System.currentTimeMillis()), arrayValues);
+            }
+            lastWriteSQL = System.currentTimeMillis();
         }
-        if (!arrayValues.isEmpty()) {
-            sqldata.addValues(new Timestamp(System.currentTimeMillis()), arrayValues);
-        }
-        needReadAllValues += System.currentTimeMillis() - startSync;
-        startSync = System.currentTimeMillis();
+        needReadAllValues += System.currentTimeMillis() - finishSync;
+        finishSync = System.currentTimeMillis();
 
-        if (needReadAllValues > 60000L) {
+        if (needReadAllValues > 30000L) {
             needReadAllValues = 0L;
             for (MasterDC dc : dcmaster) {
-                dc.readAllNotSendingValue();
                 dc.readAllSendingValue();
+                dc.readAllNotSendingValue();
             }
-
         }
         super.finishSynchronization(); //To change body of generated methods, choose Tools | Templates.
     }
@@ -204,13 +212,17 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         if (fsmaster == null) {
             return;
         }
-        needUpToData += System.currentTimeMillis() - finishSync;
-        finishSync = System.currentTimeMillis();
+        for (MasterDC dc : dcmaster) {
+            dc.readAllNoGoodSendingValue();
+        }
+        needUpToData += System.currentTimeMillis() - startSync;
+        startSync = System.currentTimeMillis();
         if (needUpToData > stepSQL) {
             needUpToData = 0L;
             for (MasterDC dc : dcmaster) {
                 if (readall) {
                     dc.readAllSendingValue();
+//                    dc.readAllNotSendingValue();
                 }
                 dc.upRingBuffer();
             }
@@ -255,10 +267,14 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             fsmaster = new ArrayList<>();
             dcmaster = new ArrayList<>();
             for (DataRecord dev : devices) {
-                if (dev.getBoolean("slip")) {
-                    mainmaster.addController(dev.getInt("canel"), dev.getString("IPAddress"), dev.getInt("port"), true);
+                if (dev.getString("IPAddress").equals("debug")) {
+                    mainmaster.addController(dev.getInt("canel"));
                 } else {
-                    mainmaster.addController(dev.getInt("canel"), dev.getString("IPAddress"), dev.getInt("port"));
+                    if (dev.getBoolean("slip")) {
+                        mainmaster.addController(dev.getInt("canel"), dev.getString("IPAddress"), dev.getInt("port"), true);
+                    } else {
+                        mainmaster.addController(dev.getInt("canel"), dev.getString("IPAddress"), dev.getInt("port"));
+                    }
                 }
             }
             for (DataRecord can : canels) {
