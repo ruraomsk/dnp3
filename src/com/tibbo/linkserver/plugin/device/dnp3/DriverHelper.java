@@ -21,6 +21,8 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import ruraomsk.list.ru.cthulhu.OneReg;
 import ruraomsk.list.ru.cthulhu.pocket.MasterDC;
 import ruraomsk.list.ru.cthulhu.pocket.MasterFS;
@@ -48,6 +50,7 @@ public class DriverHelper {
         TableFormat devices;
         TableFormat variables;
         TableFormat canel;
+        TableFormat sync;
         TableFormat history;
         TableFormat saveVLRs;
 
@@ -92,6 +95,13 @@ public class DriverHelper {
         fd = new FunctionDefinition("canels", inputFormat, canel, "Состояние каналов", ContextUtils.GROUP_DEFAULT);
         result.add(fd);
 
+        iff = FieldFormat.create("syncSetup", FieldFormat.BOOLEAN_FIELD, "Установить синхронизацию");
+        inputFormat = new TableFormat(1, 1, iff);
+        sync = new TableFormat(1, 1);
+        sync.addField(FieldFormat.create("<sync><S><D=Результат>"));
+        fd = new FunctionDefinition("syncSetup", inputFormat, sync, "Установить синхронизацию", ContextUtils.GROUP_DEFAULT);
+        result.add(fd);
+
         inputFormat = new TableFormat(1, 1);
         inputFormat.addField(FieldFormat.create("<name><S><D=Имя переменной>"));
         inputFormat.addField(FieldFormat.create("<from><D><D=Начало периода>"));
@@ -112,7 +122,7 @@ public class DriverHelper {
         fd = new FunctionDefinition("loadVLRs", inputFormat, resFrm, "Загрузить описания ВЛР", ContextUtils.GROUP_DEFAULT);
         result.add(fd);
 
-        inputFormat = new TableFormat(1,1);
+        inputFormat = new TableFormat(1, 1);
         inputFormat.addField(FieldFormat.create("<table><T><D=Table>"));
         resFrm = new TableFormat(1, 1);
         resFrm.addField(FieldFormat.create("<result><S><D=Результат>"));
@@ -127,84 +137,49 @@ public class DriverHelper {
         fd = new FunctionDefinition("loadZip", inputFormat, resFrm, "Загрузка ZIP файла", ContextUtils.GROUP_DEFAULT);
         result.add(fd);
 
+        iff = FieldFormat.create("name", FieldFormat.STRING_FIELD, "Имя переменной");
+        inputFormat = new TableFormat(1, 1, iff);
+        canel = new TableFormat(true);
+        canel.addField(FieldFormat.create("<value><T><D=Значение>"));
+        fd = new FunctionDefinition("getVariable", inputFormat, canel, "Значение перемеенной", ContextUtils.GROUP_DEFAULT);
+        result.add(fd);
+
         return result;
     }
 
     static DataTable executeFunction(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+        if (fd.getName().equalsIgnoreCase("getVariable")) {
+            if (parameters.rec().getString("name").length() < 1) {
+                return null;
+            }
+            return doGetVariable(aThis, fd, caller, parameters);
+        }
         if (fd.getName().equalsIgnoreCase("devices")) {
             if (!parameters.rec().getBoolean("devices")) {
                 return null;
             }
             return aThis.mainmaster.toDataTable(fd.getOutputFormat());
         }
+        if (fd.getName().equalsIgnoreCase("syncSetup")) {
+            if (!parameters.rec().getBoolean("syncSetup")) {
+                return null;
+            }
+            return doSyncSetup(aThis, fd, caller);
+        }
         if (fd.getName().equalsIgnoreCase("canels")) {
             if (!parameters.rec().getBoolean("canels")) {
                 return null;
             }
-            DataTable result = new DataTable(fd.getOutputFormat());
-            for (MasterDC dc : aThis.dcmaster) {
-                dc.toDataTable(result);
-            }
-            for (MasterFS fs : aThis.fsmaster) {
-                fs.toDataTable(result);
-            }
-            result.addRecord().addInt(0).addString("lastfunction").addString(aThis.lastfunction);
-            return result;
+            return doCanels(aThis, fd, caller);
         }
         if (fd.getName().equalsIgnoreCase("variables")) {
             if (parameters.rec().getInt("variables") < 1) {
                 return null;
             }
-            int controller = parameters.rec().getInt("variables");
-            for (MasterDC dc : aThis.dcmaster) {
-                if (dc.getController() == controller) {
-                    DataTable result = new DataTable(fd.getOutputFormat());
-                    for (OneReg oreg : aThis.masterregisters.getOneRegs(controller)) {
-                        DataRecord res = result.addRecord();
-                        String temp = aThis.masterregisters.getDescription(controller, oreg.getuId());
-                        String name = temp.substring(0, temp.indexOf(":"));
-                        String descr = temp.substring(temp.indexOf(":") + 1);
-                        res.setValue("name", name);
-                        res.setValue("description", descr);
-                        res.setValue("good", oreg.getGood());
-                        res.setValue("value", oreg.getValueToString());
-                        res.setValue("time", oreg.getDate());
-                        res.setValue("send", oreg.getReg().isSending());
-                        res.setValue("arch", oreg.getReg().isArchived());
-                        res.setValue("eprom", oreg.getReg().isEprom());
-                        res.setValue("constant", oreg.getReg().isConstant());
-
-                        Long lastgood = aThis.masterregisters.getLastGoodTime(controller, oreg.getuId());
-                        if (lastgood == null) {
-                            lastgood = 0L;
-                        }
-                        res.setValue("lastgood", new Date(lastgood));
-                    }
-                    return result;
-                }
-            }
-            return null;
+            return doVariables(aThis, fd, caller, parameters);
         }
         if (fd.getName().equalsIgnoreCase("history")) {
-            String svar = parameters.rec().getString("name");
-            Timestamp dfrom = new Timestamp(parameters.rec().getDate("from").getTime());
-            Timestamp dto = new Timestamp(parameters.rec().getDate("to").getTime());
-            aThis.lastfunction = svar + " " + dfrom.toString() + ":" + dto.toString();
-            OneReg oreg = aThis.masterregisters.getOneReg(svar);
-            int canel = aThis.masterregisters.getContoller(svar);
-            int key = (canel << 16) | (oreg.getuId());
-            ArrayList<SetValue> asv = aThis.sqlseek.seekData(dfrom, dto, key);
-            DataTable result = new DataTable(fd.getOutputFormat());
-            for (SetValue sv : asv) {
-                if (sv.getTime() == 0L) {
-                    continue;
-                }
-                DataRecord rec = result.addRecord();
-                rec.setValue("series", svar);
-                rec.setValue("x", new Timestamp(sv.getTime()));
-                rec.setValue("y", sv.getFloatValue());
-            }
-            return result;
+            return doHistory(aThis, fd, caller, parameters);
         }
         if (fd.getName().equalsIgnoreCase("loadVLRs")) {
             if (!parameters.rec().getBoolean("loadVLRs")) {
@@ -213,33 +188,167 @@ public class DriverHelper {
             return aThis.vlrManager.toTable(fd.getOutputFormat());
         }
         if (fd.getName().equalsIgnoreCase("saveVLRs")) {
-            DataTable result = new DataTable(fd.getOutputFormat());
-            DataTable table=parameters.rec().getDataTable("table");
-            if(table.getRecordCount()<1) return null;
-            if (aThis.vlrManager.toDB(table)) {
-                result.addRecord("Все ok!");
-            } else {
-                result.addRecord("Ошибка при сохранении");
-            }
-            return result;
+            return doSaveVLRs(aThis, fd, caller, parameters);
+
         }
         if (fd.getName().equalsIgnoreCase("loadZip")) {
-            String fileZip=parameters.rec().getString("file");
-            int number=parameters.rec().getInt("number");
-            byte[] buffer=VLRDataTableManager.loadZipFile(fileZip, number<3);
-            DataTable result=new DataTable(fd.getOutputFormat());
-            if(buffer==null) return null;
-            switch (number){
-                case 1:
-                case 2:
-                    result.addRecord(VLRDataTableManager.loadVariables(buffer));
-                    return result;
-                case 3:
-                    result.addRecord(VLRDataTableManager.loadConstants(buffer));
-                    return result;
-            }
-            return null;
+            return doLoadZip(aThis, fd, caller, parameters);
+
         }
         return null;
     }
+
+    private static DataTable doSyncSetup(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller) {
+        try {
+            DataTable result = new DataTable(fd.getOutputFormat());
+            DataTable registers = aThis.getDeviceContext().getVariable("registers", caller);
+            DataTable syncOptions = aThis.getDeviceContext().getVariable("settingSyncOptions", caller);
+            DataRecord sync;
+            Integer count = 0;
+            for (DataRecord regs : registers) {
+                if ((sync = seekSync(syncOptions, regs.getString("name"))) == null) {
+                    continue;
+                }
+                if (regs.getBoolean("constant")) {
+                    count++;
+                    sync.setValue("mode", 1);
+                }
+                if (regs.getBoolean("eprom")) {
+                    count++;
+                    sync.setValue("mode", 0);
+                    sync.setValue("syncPeriod", 600000L);
+                }
+            }
+            aThis.getDeviceContext().setVariable("settingSyncOptions", caller, syncOptions);
+            result.addRecord().addString("Изменено " + count.toString());
+            return result;
+        } catch (ContextException ex) {
+            return null;
+        }
+    }
+
+    private static DataRecord seekSync(DataTable syncOptions, String name) {
+        for (DataRecord rec : syncOptions) {
+            if (rec.getString("name").equals(name)) {
+                return rec;
+            }
+        }
+        return null;
+    }
+
+    private static DataTable doCanels(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller) {
+        DataTable result = new DataTable(fd.getOutputFormat());
+        for (MasterDC dc : aThis.dcmaster) {
+            dc.toDataTable(result);
+        }
+        for (MasterFS fs : aThis.fsmaster) {
+            fs.toDataTable(result);
+        }
+        result.addRecord().addInt(0).addString("lastfunction").addString(aThis.lastfunction);
+        return result;
+    }
+
+    private static DataTable doHistory(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+        String svar = parameters.rec().getString("name");
+        Timestamp dfrom = new Timestamp(parameters.rec().getDate("from").getTime());
+        Timestamp dto = new Timestamp(parameters.rec().getDate("to").getTime());
+        aThis.lastfunction = svar + " " + dfrom.toString() + ":" + dto.toString();
+        OneReg oreg = aThis.masterregisters.getOneReg(svar);
+        int canel = aThis.masterregisters.getContoller(svar);
+        int key = (canel << 16) | (oreg.getuId());
+        ArrayList<SetValue> asv = aThis.sqlseek.seekData(dfrom, dto, key);
+        DataTable result = new DataTable(fd.getOutputFormat());
+        for (SetValue sv : asv) {
+            if (sv.getTime() == 0L) {
+                continue;
+            }
+            DataRecord rec = result.addRecord();
+            rec.setValue("series", svar);
+            rec.setValue("x", new Timestamp(sv.getTime()));
+            rec.setValue("y", sv.getFloatValue());
+        }
+        return result;
+    }
+
+    private static DataTable doVariables(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+        int controller = parameters.rec().getInt("variables");
+        for (MasterDC dc : aThis.dcmaster) {
+            if (dc.getController() == controller) {
+                DataTable result = new DataTable(fd.getOutputFormat());
+                for (OneReg oreg : aThis.masterregisters.getOneRegs(controller)) {
+                    DataRecord res = result.addRecord();
+                    String temp = aThis.masterregisters.getDescription(controller, oreg.getuId());
+                    String name = temp.substring(0, temp.indexOf(":"));
+                    String descr = temp.substring(temp.indexOf(":") + 1);
+                    res.setValue("name", name);
+                    res.setValue("description", descr);
+                    res.setValue("good", oreg.getGood());
+                    res.setValue("value", oreg.getValueToString());
+                    res.setValue("time", oreg.getDate());
+                    res.setValue("send", oreg.getReg().isSending());
+                    res.setValue("arch", oreg.getReg().isArchived());
+                    res.setValue("eprom", oreg.getReg().isEprom());
+                    res.setValue("constant", oreg.getReg().isConstant());
+
+                    Long lastgood = aThis.masterregisters.getLastGoodTime(controller, oreg.getuId());
+                    if (lastgood == null) {
+                        lastgood = 0L;
+                    }
+                    res.setValue("lastgood", new Date(lastgood));
+                }
+                return result;
+            }
+        }
+        return null;
+    }
+
+    private static DataTable doSaveVLRs(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+        DataTable result = new DataTable(fd.getOutputFormat());
+        DataTable table = parameters.rec().getDataTable("table");
+        if (table.getRecordCount() < 1) {
+            return null;
+        }
+        if (aThis.vlrManager.toDB(table)) {
+            result.addRecord("Все ok!");
+        } else {
+            result.addRecord("Ошибка при сохранении");
+        }
+        return result;
+    }
+
+    private static DataTable doLoadZip(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+        String fileZip = parameters.rec().getString("file");
+        int number = parameters.rec().getInt("number");
+        byte[] buffer = VLRDataTableManager.loadZipFile(fileZip, number < 3);
+        DataTable result = new DataTable(fd.getOutputFormat());
+        if (buffer == null) {
+            return null;
+        }
+        switch (number) {
+            case 1:
+            case 2:
+                result.addRecord(VLRDataTableManager.loadVariables(buffer));
+                return result;
+            case 3:
+                result.addRecord(VLRDataTableManager.loadConstants(buffer));
+                return result;
+        }
+        return null;
+    }
+
+    private static DataTable doGetVariable(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+        String name = parameters.rec().getString("name");
+        OneReg oreg = aThis.masterregisters.getOneReg(name);
+        if (oreg == null) {
+            return null;
+        }
+        String description = aThis.masterregisters.getDescription(name);
+        TableFormat tf = new TableFormat(1, 1, FieldFormat.create(name, VlrHelper.setCharType(oreg.getReg().getType()), description));
+        DataTable result = new DataTable(tf);
+        result.addRecord(oreg.getValue());
+        DataTable rez=new DataTable(fd.getOutputFormat());
+        rez.addRecord().setValue("value", result);
+        return rez;
+    }
+
 }

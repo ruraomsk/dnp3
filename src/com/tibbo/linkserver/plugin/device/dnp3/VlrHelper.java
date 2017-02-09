@@ -77,6 +77,7 @@ class VlrHelper {
         VFT_REGISTERS.addField(create("<send><B><A=false><D=Флаг Send>"));
         VFT_REGISTERS.addField(create("<arch><B><A=false><D=Флаг Arch>"));
         VFT_REGISTERS.addField(create("<eprom><B><A=false><D=Флаг Eprom>"));
+        VFT_REGISTERS.addField(create("<constant><B><A=false><D=Флаг Constant>"));
         VFT_REGISTERS.addField(create("<readonly><B><A=false><D=Только чтение>"));
     }
 
@@ -157,6 +158,7 @@ class VlrHelper {
                 reg.setValue("send", oreg.getReg().isSending());
                 reg.setValue("arch", oreg.getReg().isArchived());
                 reg.setValue("eprom", oreg.getReg().isEprom());
+                reg.setValue("constant", oreg.getReg().isConstant());
                 reg.setValue("readonly", oreg.getReg().isReadOnly());
 
             }

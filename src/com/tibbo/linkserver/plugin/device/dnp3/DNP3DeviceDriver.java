@@ -56,13 +56,11 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     String lastfunction = "";
     StrongSql sqldata;
     StrongSql sqlseek;
-    Long needReadAllValues = 0L;
-    Long needRingBuffer = 0L;
-    Long needUpToData = 0L;
-    Long startSync = 0L;
-    Long finishSync = 0L;
-    Long setDateTime = 0L;
-    Long lastWriteSQL = 0L;
+    Long needReadAllValues = System.currentTimeMillis();
+    Long needRingBuffer = System.currentTimeMillis();
+    Long needUpToData = System.currentTimeMillis();
+    Long setDateTime = System.currentTimeMillis();
+    Long lastWriteSQL = System.currentTimeMillis();
     boolean readall = true;
 
     public DNP3DeviceDriver() {
@@ -194,11 +192,9 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             }
             lastWriteSQL = System.currentTimeMillis();
         }
-        needReadAllValues += System.currentTimeMillis() - finishSync;
-        finishSync = System.currentTimeMillis();
 
-        if (needReadAllValues > 30000L) {
-            needReadAllValues = 0L;
+        if ((System.currentTimeMillis() - needReadAllValues) > 30000L) {
+            needReadAllValues = System.currentTimeMillis();
             for (MasterDC dc : dcmaster) {
                 dc.readAllSendingValue();
                 dc.readAllNotSendingValue();
@@ -212,13 +208,14 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         if (fsmaster == null) {
             return;
         }
+        if (dcmaster == null) {
+            return;
+        }
         for (MasterDC dc : dcmaster) {
             dc.readAllNoGoodSendingValue();
         }
-        needUpToData += System.currentTimeMillis() - startSync;
-        startSync = System.currentTimeMillis();
-        if (needUpToData > stepSQL) {
-            needUpToData = 0L;
+        if ((System.currentTimeMillis() - needUpToData) > stepSQL) {
+            needUpToData = System.currentTimeMillis();
             for (MasterDC dc : dcmaster) {
                 if (readall) {
                     dc.readAllSendingValue();
@@ -230,7 +227,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
                 fs.requestDateTime();
             }
         }
-        if ((System.currentTimeMillis() - setDateTime) > 3600000L) {
+        if ((System.currentTimeMillis() - setDateTime) > 120000L) {
             for (MasterFS fs : fsmaster) {
                 TimeZone zone = new SimpleTimeZone(0, "UTC");
                 fs.setDateTime(new GregorianCalendar(zone));
@@ -310,8 +307,6 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         } catch (ContextException ex) {
             throw new DeviceException("Нет canels или devices");
         }
-        startSync = System.currentTimeMillis();
-        finishSync = System.currentTimeMillis();
         super.connect();
     }
 
