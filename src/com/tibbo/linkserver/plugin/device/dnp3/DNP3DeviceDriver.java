@@ -61,6 +61,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     Long needUpToData = System.currentTimeMillis();
     Long setDateTime = System.currentTimeMillis();
     Long lastWriteSQL = System.currentTimeMillis();
+    int needWriteEeprom = 0;
     boolean readall = true;
 
     public DNP3DeviceDriver() {
@@ -171,6 +172,10 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             dc.readAllNoGoodNotSendingValue();
         }
         if ((System.currentTimeMillis() - lastWriteSQL) > stepSQL) {
+            needWriteEeprom++;
+            if (needWriteEeprom > 10) {
+                needWriteEeprom = 0;
+            }
             ArrayList<SetValue> arrayValues = new ArrayList<>();
             for (MasterDC dc : dcmaster) {
                 long timeall = System.currentTimeMillis();
@@ -178,6 +183,12 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
                     if (oreg.getGood() == Util.CT_DATA_NOGOOD) {
                         continue;
                     }
+                    if (oreg.getReg().isConstant()) {
+                        continue;
+                    }
+                    if (oreg.getReg().isEprom() & needWriteEeprom != 0) {
+                        continue;
+                    };
                     Integer newID = dc.getController() << 16 | oreg.getuId();
                     Object value = oreg.getValue();
                     arrayValues.add(new SetValue(newID, oreg.getTime(), value, oreg.getGood()));

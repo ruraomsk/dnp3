@@ -21,13 +21,10 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 import ruraomsk.list.ru.cthulhu.OneReg;
 import ruraomsk.list.ru.cthulhu.pocket.MasterDC;
 import ruraomsk.list.ru.cthulhu.pocket.MasterFS;
 import ruraomsk.list.ru.strongsql.SetValue;
-import ruraomsk.list.ru.vlrmanager.VLRDataTableManager;
 
 /**
  *
@@ -113,29 +110,29 @@ public class DriverHelper {
         fd = new FunctionDefinition("history", inputFormat, history, "История переменной", ContextUtils.GROUP_DEFAULT);
         result.add(fd);
 
-        iff = FieldFormat.create("loadVLRs", FieldFormat.BOOLEAN_FIELD, "Загрузить описания ВЛР");
-        inputFormat = new TableFormat(1, 1, iff);
-        TableFormat resFrm = new TableFormat();
-        resFrm.addField(FieldFormat.create("<idvlr><S><D=Id VLR>"));
-        resFrm.addField(FieldFormat.create("<idfile><I><D=Id FILE>"));
-        resFrm.addField(FieldFormat.create("<variables><T><D=Таблица переменных>"));
-        fd = new FunctionDefinition("loadVLRs", inputFormat, resFrm, "Загрузить описания ВЛР", ContextUtils.GROUP_DEFAULT);
-        result.add(fd);
-
-        inputFormat = new TableFormat(1, 1);
-        inputFormat.addField(FieldFormat.create("<table><T><D=Table>"));
-        resFrm = new TableFormat(1, 1);
-        resFrm.addField(FieldFormat.create("<result><S><D=Результат>"));
-        fd = new FunctionDefinition("saveVLRs", inputFormat, resFrm, "Сохранить описания ВЛР", ContextUtils.GROUP_DEFAULT);
-        result.add(fd);
-
-        inputFormat = new TableFormat(1, 1);
-        inputFormat.addField(FieldFormat.create("<file><S><D=Имя файла>"));
-        inputFormat.addField(FieldFormat.create("<number><I><D=Номер файла>"));
-        resFrm = new TableFormat(true);
-        resFrm.addField(FieldFormat.create("<table><T><D=Таблица>"));
-        fd = new FunctionDefinition("loadZip", inputFormat, resFrm, "Загрузка ZIP файла", ContextUtils.GROUP_DEFAULT);
-        result.add(fd);
+//        iff = FieldFormat.create("loadVLRs", FieldFormat.BOOLEAN_FIELD, "Загрузить описания ВЛР");
+//        inputFormat = new TableFormat(1, 1, iff);
+//        TableFormat resFrm = new TableFormat();
+//        resFrm.addField(FieldFormat.create("<idvlr><S><D=Id VLR>"));
+//        resFrm.addField(FieldFormat.create("<idfile><I><D=Id FILE>"));
+//        resFrm.addField(FieldFormat.create("<variables><T><D=Таблица переменных>"));
+//        fd = new FunctionDefinition("loadVLRs", inputFormat, resFrm, "Загрузить описания ВЛР", ContextUtils.GROUP_DEFAULT);
+//        result.add(fd);
+//
+//        inputFormat = new TableFormat(1, 1);
+//        inputFormat.addField(FieldFormat.create("<table><T><D=Table>"));
+//        resFrm = new TableFormat(1, 1);
+//        resFrm.addField(FieldFormat.create("<result><S><D=Результат>"));
+//        fd = new FunctionDefinition("saveVLRs", inputFormat, resFrm, "Сохранить описания ВЛР", ContextUtils.GROUP_DEFAULT);
+//        result.add(fd);
+//
+//        inputFormat = new TableFormat(1, 1);
+//        inputFormat.addField(FieldFormat.create("<file><S><D=Имя файла>"));
+//        inputFormat.addField(FieldFormat.create("<number><I><D=Номер файла>"));
+//        resFrm = new TableFormat(true);
+//        resFrm.addField(FieldFormat.create("<table><T><D=Таблица>"));
+//        fd = new FunctionDefinition("loadZip", inputFormat, resFrm, "Загрузка ZIP файла", ContextUtils.GROUP_DEFAULT);
+//        result.add(fd);
 
         iff = FieldFormat.create("name", FieldFormat.STRING_FIELD, "Имя переменной");
         inputFormat = new TableFormat(1, 1, iff);
@@ -181,20 +178,20 @@ public class DriverHelper {
         if (fd.getName().equalsIgnoreCase("history")) {
             return doHistory(aThis, fd, caller, parameters);
         }
-        if (fd.getName().equalsIgnoreCase("loadVLRs")) {
-            if (!parameters.rec().getBoolean("loadVLRs")) {
-                return null;
-            }
-            return aThis.vlrManager.toTable(fd.getOutputFormat());
-        }
-        if (fd.getName().equalsIgnoreCase("saveVLRs")) {
-            return doSaveVLRs(aThis, fd, caller, parameters);
-
-        }
-        if (fd.getName().equalsIgnoreCase("loadZip")) {
-            return doLoadZip(aThis, fd, caller, parameters);
-
-        }
+//        if (fd.getName().equalsIgnoreCase("loadVLRs")) {
+//            if (!parameters.rec().getBoolean("loadVLRs")) {
+//                return null;
+//            }
+//            return aThis.vlrManager.toTable(fd.getOutputFormat());
+//        }
+//        if (fd.getName().equalsIgnoreCase("saveVLRs")) {
+//            return doSaveVLRs(aThis, fd, caller, parameters);
+//
+//        }
+//        if (fd.getName().equalsIgnoreCase("loadZip")) {
+//            return doLoadZip(aThis, fd, caller, parameters);
+//
+//        }
         return null;
     }
 
@@ -213,7 +210,7 @@ public class DriverHelper {
                     count++;
                     sync.setValue("mode", 1);
                 }
-                if (regs.getBoolean("eprom")) {
+                if (regs.getBoolean("eprom")|(regs.getBoolean("send"))) {
                     count++;
                     sync.setValue("mode", 0);
                     sync.setValue("syncPeriod", 600000L);
@@ -302,39 +299,39 @@ public class DriverHelper {
         return null;
     }
 
-    private static DataTable doSaveVLRs(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
-        DataTable result = new DataTable(fd.getOutputFormat());
-        DataTable table = parameters.rec().getDataTable("table");
-        if (table.getRecordCount() < 1) {
-            return null;
-        }
-        if (aThis.vlrManager.toDB(table)) {
-            result.addRecord("Все ok!");
-        } else {
-            result.addRecord("Ошибка при сохранении");
-        }
-        return result;
-    }
+//    private static DataTable doSaveVLRs(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+//        DataTable result = new DataTable(fd.getOutputFormat());
+//        DataTable table = parameters.rec().getDataTable("table");
+//        if (table.getRecordCount() < 1) {
+//            return null;
+//        }
+//        if (aThis.vlrManager.toDB(table)) {
+//            result.addRecord("Все ok!");
+//        } else {
+//            result.addRecord("Ошибка при сохранении");
+//        }
+//        return result;
+//    }
 
-    private static DataTable doLoadZip(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
-        String fileZip = parameters.rec().getString("file");
-        int number = parameters.rec().getInt("number");
-        byte[] buffer = VLRDataTableManager.loadZipFile(fileZip, number < 3);
-        DataTable result = new DataTable(fd.getOutputFormat());
-        if (buffer == null) {
-            return null;
-        }
-        switch (number) {
-            case 1:
-            case 2:
-                result.addRecord(VLRDataTableManager.loadVariables(buffer));
-                return result;
-            case 3:
-                result.addRecord(VLRDataTableManager.loadConstants(buffer));
-                return result;
-        }
-        return null;
-    }
+//    private static DataTable doLoadZip(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
+//        String fileZip = parameters.rec().getString("file");
+//        int number = parameters.rec().getInt("number");
+//        byte[] buffer = VLRDataTableManager.loadZipFile(fileZip, number < 3);
+//        DataTable result = new DataTable(fd.getOutputFormat());
+//        if (buffer == null) {
+//            return null;
+//        }
+//        switch (number) {
+//            case 1:
+//            case 2:
+//                result.addRecord(VLRDataTableManager.loadVariables(buffer));
+//                return result;
+//            case 3:
+//                result.addRecord(VLRDataTableManager.loadConstants(buffer));
+//                return result;
+//        }
+//        return null;
+//    }
 
     private static DataTable doGetVariable(DNP3DeviceDriver aThis, FunctionDefinition fd, CallerController caller, DataTable parameters) {
         String name = parameters.rec().getString("name");
