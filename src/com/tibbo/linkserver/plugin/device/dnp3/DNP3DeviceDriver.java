@@ -323,6 +323,10 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
 
     @Override
     public void disconnect() throws DeviceException {
+        if(fsmaster==null) {
+            super.disconnect();
+            return;
+        }
         for (MasterFS fs : fsmaster) {
             fs.stopAll();
         }
