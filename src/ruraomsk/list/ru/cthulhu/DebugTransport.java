@@ -141,7 +141,7 @@ public class DebugTransport extends BaseTransport {
                     oreg.setValue((long) Math.round(Math.random() * 100000));
                     break;
                 case Util.CT_TYPE_FLOAT:
-                    oreg.setValue((float) Math.random() * 100000);
+                    oreg.setValue((float) Math.random() * 100);
                     break;
                 case Util.CT_TYPE_BYTE:
                     oreg.setValue((byte) Math.round(Math.random() * 127));
@@ -161,12 +161,12 @@ public class DebugTransport extends BaseTransport {
             if (!oregs.getReg().isSending()) {
                 continue;
             }
-            int count=10;
+            int count=20;
             if (Math.random() > 0.9f) {
                 count=1;
             }
             for (int i = 0; i < count; i++) {
-                OneReg oreg = new OneReg(timeall+(i*30L), oregs.getReg());
+                OneReg oreg = new OneReg(timeall+(i*100L), oregs.getReg());
                 switch (oregs.getReg().getType()) {
                     case Util.CT_TYPE_BOOL:
                         oreg.setValue(Math.random() > 0.5f);
@@ -178,7 +178,7 @@ public class DebugTransport extends BaseTransport {
                         oreg.setValue((long) Math.round(Math.random() * 150000));
                         break;
                     case Util.CT_TYPE_FLOAT:
-                        oreg.setValue((float) Math.random() * 150000);
+                        oreg.setValue((float) Math.random() * 75);
                         break;
                     case Util.CT_TYPE_BYTE:
                         oreg.setValue((byte) Math.round(Math.random() * 127));
