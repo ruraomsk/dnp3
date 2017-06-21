@@ -21,7 +21,9 @@ import com.tibbo.aggregate.common.device.DisconnectionException;
 import com.tibbo.aggregate.common.security.ServerPermissionChecker;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.GregorianCalendar;
+import java.util.HashMap;
 import java.util.List;
 import java.util.SimpleTimeZone;
 import java.util.TimeZone;
@@ -63,6 +65,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     Long lastWriteSQL = System.currentTimeMillis();
     int needWriteEeprom = 0;
     boolean readall = true;
+    HashMap<String, Integer> mapErrorName = new HashMap<>();
 
     public DNP3DeviceDriver() {
         super("vlrbus", VlrHelper.VFT_SQL_PROP);
@@ -89,6 +92,9 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
         vd = new VariableDefinition("registers", VlrHelper.VFT_REGISTERS, true, true, "Переменные", ContextUtils.GROUP_ACCESS);
         vd.setWritePermissions(ServerPermissionChecker.getAdminPermissions());
         deviceContext.addVariableDefinition(vd);
+        vd = new VariableDefinition("errors", VlrHelper.VFT_ERROR_STATUS, true, true, "Ошибки", ContextUtils.GROUP_ACCESS);
+        vd.setWritePermissions(ServerPermissionChecker.getAdminPermissions());
+        deviceContext.addVariableDefinition(vd);
 
         makeRegisters(deviceContext);
         deviceContext.setDeviceType("vlrbus");
@@ -113,11 +119,22 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     @Override
     public List<VariableDefinition> readVariableDefinitions(DeviceEntities entities) throws ContextException, DeviceException, DisconnectionException {
         List<VariableDefinition> result = new ArrayList<>();
+        mapErrorName.clear();
         for (DataRecord reg : getDeviceContext().getVariable("registers", getDeviceContext().getCallerController())) {
-            String name = reg.getString("name");
-            TableFormat tf = new TableFormat(1, 1, FieldFormat.create(name, VlrHelper.setCharType(reg.getInt("type")), reg.getString("description")));
-            tf.setUnresizable(true);
-            result.add(new VariableDefinition(name, tf, true, !reg.getBoolean("readonly"), reg.getString("description"), "remote"));
+            if (reg.getBoolean("visible")) {
+                String name = reg.getString("name");
+                mapErrorName.put(name, reg.getInt("canel"));
+                TableFormat tf = new TableFormat(1, 1, FieldFormat.create(name, VlrHelper.setCharType(reg.getInt("type")), reg.getString("description")));
+                tf.setUnresizable(true);
+                result.add(new VariableDefinition(name, tf, true, false, reg.getString("description"), "remote"));
+            }
+            if (reg.getBoolean("eprom")) {
+                String name = reg.getString("name");
+                TableFormat tf = new TableFormat(1, 1, FieldFormat.create(name, VlrHelper.setCharType(reg.getInt("type")), reg.getString("description")));
+                tf.setUnresizable(true);
+                result.add(new VariableDefinition(name, tf, true, true, reg.getString("description"), "remote"));
+
+            }
         }
         return result;
     }
@@ -125,6 +142,19 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
     @Override
     public DataTable readVariableValue(VariableDefinition vd, CallerController caller) throws ContextException, DeviceException, DisconnectionException {
         DataTable result = new DataTable(vd.getFormat());
+        if (mapErrorName.containsKey(vd.getName())) {
+            Integer canal = mapErrorName.get(vd.getName());
+            for (DataRecord rec : getDeviceContext().getVariable("errors", getDeviceContext().getCallerController())) {
+                if (rec.getInt("canel") != canal) {
+                    continue;
+                }
+                result.addRecord(rec.getBoolean("isError"));
+                return result;
+            }
+            result.addRecord(0);
+            return result;
+        }
+
         OneReg oreg = masterregisters.getOneReg(vd.getName());
         if (oreg == null) {
             result.addRecord(0);
@@ -246,6 +276,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             }
             setDateTime = System.currentTimeMillis();
         }
+        changeStatus();
         super.startSynchronization(); //To change body of generated methods, choose Tools | Templates.
     }
 
@@ -302,16 +333,28 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             }
             setDateTime = System.currentTimeMillis();
             if (initSQL) {
+                Log.CORE.error("Создаем базу .....");
                 ArrayList<DescrValue> arraydesc = new ArrayList<>();
                 DataTable registers = getDeviceContext().getVariable("registers", getDeviceContext().getCallerController());
                 Integer count = 0;
                 for (DataRecord reg : registers) {
+                    if (reg.getBoolean("visible")) {
+                        continue;
+                    }
                     String name = reg.getString("name");
                     int key = (reg.getInt("canel") << 16) | (reg.getInt("id"));
+                    if (key == 0) {
+                        continue;
+                    }
                     arraydesc.add(new DescrValue(name, key, reg.getInt("type")));
                     count++;
                 }
-                new StrongSql(param, arraydesc, 1, longSQL, "VLR DataTable");
+                new StrongSql(param, arraydesc, 1, longSQL, new Date().toString());
+                Log.CORE.error("Создали базу .....");
+                DataTable cp = getDeviceContext().getVariable("connectionProperties", getDeviceContext().getCallerController());
+                cp.rec().setValue("initSQL", false);
+                getDeviceContext().setVariable("connectionProperties", getDeviceContext().getCallerController(), cp);
+
             }
             sqldata = new StrongSql(param, stepSQL);
             sqlseek = new StrongSql(param);
@@ -323,7 +366,7 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
 
     @Override
     public void disconnect() throws DeviceException {
-        if(fsmaster==null) {
+        if (fsmaster == null) {
             super.disconnect();
             return;
         }
@@ -352,17 +395,81 @@ public class DNP3DeviceDriver extends AbstractDeviceDriver {
             Log.CORE.error("Отсутствует соединение " + param.toString());
         }
         DataTable canels = deviceContext.getVariable("canels", getDeviceContext().getCallerController());
+        DataTable errorsTable = new DataTable(VlrHelper.VFT_ERROR_STATUS);
         masterregisters = new Registers();
         for (DataRecord crec : canels) {
-            DataTable BPO, SPO, Const;
+            DataTable BPO, SPO, Const, Error;
             BPO = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("spo"), 1));
             SPO = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("ppo"), 2));
             Const = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("ppo"), 3));
             VlrHelper.addRegisters(masterregisters, crec.getInt("canel"), crec.getString("prefix"), BPO, SPO, Const);
+            Error = VLRDataTableManager.fromXML(vlrManager.getXML(crec.getString("ppo"), 4));
+            VlrHelper.addErrors(errorsTable, crec.getInt("canel"), crec.getString("prefix"), Error);
             writeflag = true;
         }
         if (writeflag) {
             deviceContext.setVariable("registers", getDeviceContext().getCallerController(), VlrHelper.makeRegisters(masterregisters, canels));
+            deviceContext.setVariable("errors", getDeviceContext().getCallerController(), errorsTable);
+        }
+    }
+
+    private void changeStatus() {
+        try {
+            DataTable error = getDeviceContext().getVariable("errors", getDeviceContext().getCallerController());
+            for (DataRecord rec : error) {
+                rec.setValue("isOldError", rec.getBoolean("isError"));
+                boolean isError = false;
+                boolean isKvit = false;
+                DataTable detail = rec.getDataTable("detailStatus");
+                for (DataRecord rs : detail) {
+                    OneReg oreg = masterregisters.getOneReg(rs.getString("name"));
+                    if (oreg == null) {
+                        continue;
+                    }
+                    boolean value = false;
+                    switch (oreg.getReg().getType()) {
+                        case 0:
+                            value = (boolean) oreg.getValue();
+                            break;
+                        case 1:
+                            value = ((int) oreg.getValue()) != 0;
+                            break;
+                        case 2:
+                            value = ((float) oreg.getValue()) != 0.0f;
+                            break;
+                        case 3:
+                            value = ((long) oreg.getValue()) != 0L;
+                            break;
+                        case 4:
+                            value = ((byte) oreg.getValue()) != 0;
+                            break;
+                    }
+                    if (rs.getBoolean("reverse")) {
+                        value = !value;
+                    }
+                    boolean old = rs.getBoolean("new");
+                    boolean kvit = rs.getBoolean("kvit");
+                    Date time = rs.getDate("time");
+                    if (value && !old) {
+                        kvit = true;
+                        time = new Date();
+                        isKvit = true;
+                    }
+                    isError = isError | value;
+                    rs.setValue("new", value);
+                    rs.setValue("old", old);
+                    rs.setValue("kvit", kvit);
+                    rs.setValue("time", time);
+                }
+                rec.setValue("isError", isError);
+                rec.setValue("isKvit", isKvit);
+                if (isKvit) {
+                    rec.setValue("lastTime", new Date());
+                }
+            }
+            getDeviceContext().setVariable("errors", getDeviceContext().getCallerController(), error);
+        } catch (ContextException ex) {
+            return;
         }
     }
 
